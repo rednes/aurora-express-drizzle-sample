@@ -16,6 +16,13 @@ const signer = new Signer({
   region: AWS_REGION,
 });
 
+// sv-SE ロケールは "YYYY-MM-DD HH:MM:SS" 形式で出力されるため ISO 形式に近く扱いやすい。
+// TZ 環境変数（例: Asia/Tokyo）を設定すると JST などのローカル時刻で表示できる。
+// Lambda ランタイムは TZ=:UTC（POSIX 形式）を自動設定するが、toLocaleString は
+// コロン付きのタイムゾーン指定を受け付けないため、先頭のコロンを除去する。
+const formatDate = (d: Date) =>
+  d.toLocaleString('sv-SE', { timeZone: (process.env.TZ ?? 'UTC').replace(/^:/, ''), hour12: false }).replace(' ', 'T');
+
 // IAM 認証トークンは15分有効。有効期限内はキャッシュを使い回し、
 // 期限切れ5分前になったら次の接続時に自動で再取得する。
 const TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -42,11 +49,6 @@ async function getAuthToken(): Promise<string> {
   return cachedToken;
 }
 
-// sv-SE ロケールは "YYYY-MM-DD HH:MM:SS" 形式で出力されるため ISO 形式に近く扱いやすい。
-// TZ 環境変数（例: Asia/Tokyo）を設定すると JST などのローカル時刻で表示できる。
-const formatDate = (d: Date) =>
-  d.toLocaleString('sv-SE', { timeZone: process.env.TZ ?? 'UTC', hour12: false }).replace(' ', 'T');
-
 logger.info('[db/index] module initialized');
 
 const pool = new Pool({
@@ -54,13 +56,14 @@ const pool = new Pool({
   port: 5432,
   user: DB_USER,
   database: DB_NAME,
-  // Aurora PostgreSQL Express への接続には SSL が必須
-  ssl: true,
+  // サーバー証明書を検証して中間者攻撃を防ぐ
+  ssl: { rejectUnauthorized: true },
   // 接続数を1に制限（このサンプルでは1接続で十分）
   max: 1,
-  // デフォルト（10秒）のままだと次のリクエストまでに接続が切れやすいため長めに設定する。
   // Aurora Serverless はサーバー側で約5分でアイドル接続を切断するため、それより短い4分に設定。
   idleTimeoutMillis: 4 * 60 * 1000,
+  // Aurora Serverless のコールドスタート時に接続が無限に待ち続けないようタイムアウトを設定する。
+  connectionTimeoutMillis: 30 * 1000,
   // password に関数を渡すと、pg が新しい接続を確立するたびに呼び出される。
   // IAM 認証トークンには有効期限があるため、値ではなく関数参照を渡して動的に取得する。
   password: getAuthToken,
@@ -69,14 +72,19 @@ const pool = new Pool({
 pool.on('connect', () => logger.info('[pool] new connection established'));
 pool.on('error', (err) => logger.error({ err }, '[pool] connection error'));
 
-// pool.query をラップして、クエリ実行後に結果行数をログ出力する。
-// Drizzle の logger は実行前しか呼ばれないため、結果ログはここで補う。
+// pool.query をラップして、クエリ実行後に結果行数をログ出力し、エラー時にもログを残す。
+// Drizzle の logger は実行前しか呼ばれないため、結果とエラーのログはここで補う。
 const origQuery = pool.query.bind(pool);
 (pool as any).query = (...args: any[]) =>
-  Promise.resolve((origQuery as any)(...args)).then((r: any) => {
-    logger.info(`[db] result: ${r.rowCount ?? 0} rows`);
-    return r;
-  });
+  Promise.resolve((origQuery as any)(...args))
+    .then((r: any) => {
+      logger.info(`[db] result: ${r.rowCount ?? 0} rows`);
+      return r;
+    })
+    .catch((err: unknown) => {
+      logger.error({ err }, '[db] query error');
+      throw err;
+    });
 
 export const db = drizzle({
   client: pool,

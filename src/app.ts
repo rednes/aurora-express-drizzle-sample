@@ -2,8 +2,18 @@ import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
 import { db } from './db/index.js';
 import { usersTable } from './db/schema.js';
+import { logger } from './logger.js';
 
 const app = new Hono();
+
+// Lambda インスタンス識別用ヘッダー（ローカル環境では未設定のため省略される）
+const logStreamName = process.env.AWS_LAMBDA_LOG_STREAM_NAME;
+if (logStreamName) {
+  app.use('*', async (c, next) => {
+    await next();
+    c.res.headers.set('X-Lambda-Log-Stream', logStreamName);
+  });
+}
 
 // Number() は "abc" に対して NaN を返すため、parseInt + isNaN で安全に変換する
 const parseId = (raw: string) => {
@@ -67,6 +77,18 @@ app.delete('/users/:id', async (c) => {
     .returning();
   if (!user) return c.json({ error: 'Not Found' }, 404);
   return c.json(user);
+});
+
+// IAM トークン期限切れ（28P01）は 503 を返す。その他の未処理エラーは 500 を返す。
+// Drizzle が DrizzleQueryError でラップするため、err.cause?.code も確認する。
+app.onError((err, c) => {
+  const code = (err as any).code ?? (err as any).cause?.code;
+  if (code === '28P01') {
+    logger.error({ err }, '[app] database authentication failed');
+    return c.json({ error: 'Service temporarily unavailable' }, 503);
+  }
+  logger.error({ err }, '[app] unhandled error');
+  return c.json({ error: 'Internal Server Error' }, 500);
 });
 
 export default app;

@@ -1,0 +1,16 @@
+# terraform.tfvars.example
+# このファイルをコピーして terraform.tfvars を作成し、各値を設定してください。
+# terraform.tfvars はシークレットを含む可能性があるため .gitignore で除外されています。
+#
+#   cp terraform.tfvars.example terraform.tfvars
+
+db_host = "my-cluster.cluster-xxxxxxxxxxxx.ap-northeast-1.rds.amazonaws.com"
+
+# 以下はデフォルト値から変更する場合のみ設定してください
+# aws_region    = "ap-northeast-1"
+# function_name = "aurora-express-drizzle-sample"
+# db_user       = "postgres"
+# db_name       = "postgres"
+# log_level     = "info"
+# tz            = "Asia/Tokyo"
+# tags          = { Env = "prod" }

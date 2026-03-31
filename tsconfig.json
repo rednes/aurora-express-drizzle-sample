@@ -8,5 +8,6 @@
     "skipLibCheck": true,
     "outDir": "./dist"
   },
-  "include": ["src/**/*", "drizzle.config.ts"]
+  "include": ["src/**/*", "drizzle.config.ts"],
+  "exclude": ["src/local.ts", "node_modules"]
 }
